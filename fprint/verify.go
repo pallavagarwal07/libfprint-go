@@ -12,6 +12,7 @@ const (
 	VERIFY_FAILED
 	VERIFY_TIMEOUT
 	VERIFY_ERROR
+	VERIFY_MAX_TRIES
 	VERIFY_SEE_OTHER
 )
 
@@ -19,7 +20,7 @@ func (c *Conn) StartVerification(max_tries, timeout_sec int) (<-chan VerifyResul
 	if err := c.attemptVerify(); err != nil {
 		return nil, err
 	}
-	go c.VerifyRoutine(c.verifyResult, max_tries, timeout_sec)
+	go c.VerifyRoutine(max_tries, timeout_sec)
 	return c.verifyResult, nil
 }
 
@@ -36,32 +37,38 @@ func (c *Conn) attemptVerify() error {
 	return nil
 }
 
-func (c *Conn) VerifyRoutine(ch chan VerifyResult, tries, timeout_sec int) {
+func (c *Conn) VerifyRoutine(tries, timeout_sec int) {
 	timeout := time.After(time.Duration(timeout_sec) * time.Second)
 	for c.attempts <= tries && !c.finished {
 		select {
 		case sig := <-c.msgs:
+			if c.finished {
+				return
+			}
 			c.VerifySignals = append(c.VerifySignals, sig)
 			if sig.Name != SIGNAL_VERIFY_STATUS {
-				ch <- VERIFY_SEE_OTHER
+				c.verifyResult <- VERIFY_SEE_OTHER
 				break
 			}
 			if sig.Body[0].(string) == "verify-match" {
-				ch <- VERIFY_SUCCESS
+				c.verifyResult <- VERIFY_SUCCESS
 				c.Close()
 			}
 			if sig.Body[0].(string) == "verify-no-match" {
-				ch <- VERIFY_FAILED
+				c.verifyResult <- VERIFY_FAILED
 				if err := c.attemptVerify(); err != nil {
 					fmt.Println(err)
-					ch <- VERIFY_ERROR
+					c.verifyResult <- VERIFY_ERROR
 					c.Close()
 				}
 			}
 		case <-timeout:
-			ch <- VERIFY_TIMEOUT
+			c.verifyResult <- VERIFY_TIMEOUT
 			c.Close()
 		}
+	}
+	if !c.finished {
+		c.verifyResult <- VERIFY_MAX_TRIES
 	}
 	c.Close()
 }

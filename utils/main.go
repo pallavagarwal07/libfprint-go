@@ -25,9 +25,6 @@ func app() error {
 		return err
 	}
 
-	for msg := range ch {
-		fmt.Println(msg)
-	}
 	return nil
 }
 
